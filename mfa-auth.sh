@@ -28,15 +28,27 @@ install_check "aws"
 # check jq cli
 install_check "jq"
 
-AWS_USER_ID=$(aws sts get-caller-identity | jq -r ".UserId")
-MFA_DEVICE_ARN=$(aws iam list-virtual-mfa-devices | jq -r '.VirtualMFADevices[] | select(.User.UserId == "'$AWS_USER_ID'") | .SerialNumber')
+aws configure set --profile $MFA_PROFILE_NAME output json
+
+CHECK_SESSION=$(aws ssm describe-sessions --state History 2> /dev/null)
+MFA_DEVICE_ARN=$(aws configure get --profile $MFA_PROFILE_NAME mfa_serial)
+
+if [ $CHECK_SESSION ] && [ -z $MFA_DEVICE_ARN ]; then
+    # session is aliving
+    AWS_USER_ID=$(aws sts get-caller-identity | jq -r ".UserId")
+    MFA_DEVICE_ARN=$(aws iam list-virtual-mfa-devices | jq -r '.VirtualMFADevices[] | select(.User.UserId == "'$AWS_USER_ID'") | .SerialNumber')
+elif [ -z $MFA_DEVICE_ARN ]; then
+    echo -n "Please input mfa serial:"
+    read MFA_DEVICE_ARN
+fi
+
+aws configure set --profile $MFA_PROFILE_NAME mfa_serial $MFA_DEVICE_ARN
 
 echo "Detected ARN: "$MFA_DEVICE_ARN
 
 echo -n "Input OTP:"
 read TOKEN_CODE
 
-echo aws sts get-session-token --serial-number $MFA_DEVICE_ARN --token-code $TOKEN_CODE --duration-seconds $SESSION_TIME
 MFA_PROFILE=$(aws sts get-session-token --serial-number $MFA_DEVICE_ARN --token-code $TOKEN_CODE --duration-seconds $SESSION_TIME)
 
 echo $MFA_PROFILE | jq
@@ -44,6 +56,7 @@ MFA_PROFILE_ACCESS_KEY=$(echo $MFA_PROFILE | jq -r ".Credentials.AccessKeyId")
 MFA_PROFILE_SECRET_ACCESS_KEY=$(echo $MFA_PROFILE | jq -r ".Credentials.SecretAccessKey")
 MFA_PROFILE_SESSION_TOKEN=$(echo $MFA_PROFILE | jq -r ".Credentials.SessionToken")
 
+aws configure set --profile $MFA_PROFILE_NAME mfa_serial $MFA_DEVICE_ARN
 aws configure set --profile $MFA_PROFILE_NAME region $DEFAULT_REGION
 aws configure set --profile $MFA_PROFILE_NAME aws_access_key_id $MFA_PROFILE_ACCESS_KEY
 aws configure set --profile $MFA_PROFILE_NAME aws_secret_access_key $MFA_PROFILE_SECRET_ACCESS_KEY
